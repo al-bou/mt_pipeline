@@ -127,10 +127,11 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Test loading translator and translating a sample.")
     parser.add_argument("model_dir", help="Path to CTranslate2 model")
     parser.add_argument("--beam", type=int, default=5, help="Beam size for translation batch.")
+    parser.add_argument("--device", choices=["cpu","cuda"], default=None, help="Device to use for translation (auto-detect if omitted).")
     args = parser.parse_args()
 
     try:
-        tr, tok = load_translator(args.model_dir, device=None)
+        tr, tok = load_translator(args.model_dir, device=args.device)
     except Exception as e:
         sys.exit(f"Error loading translator: {e}")
 
