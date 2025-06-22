@@ -3,7 +3,7 @@
 
 Provides:
     - load_translator: load CTranslate2 translator and HF tokenizer.
-    - translate_batch: wrapper for batch translation using tokenizer + translator.
+    - translate_batch: wrapper for batch translation using tokenizer + translator, with logging.
 
 Usage:
     from mt_pipeline.utils.mt import load_translator, translate_batch
@@ -13,6 +13,7 @@ Functions assume you have converted an NLLB-200 model to CTranslate2 format.
 
 from pathlib import Path
 from typing import Tuple, List, Optional
+import time
 
 import ctranslate2 as ct2
 from transformers import AutoTokenizer
@@ -56,6 +57,7 @@ def load_translator(
         raise FileNotFoundError(f"Model directory not found: {model_path}")
 
     device_choice = device if device else _detect_device()
+    print(f"[mt] Loading translator on device: {device_choice}")
 
     translator = ct2.Translator(
         str(model_path),
@@ -67,6 +69,7 @@ def load_translator(
     )
 
     tokenizer = AutoTokenizer.from_pretrained(_DEFAULT_TOKENIZER_REPO)
+    print(f"[mt] Tokenizer loaded, vocab size: {len(tokenizer)}")
 
     return translator, tokenizer
 
@@ -82,7 +85,12 @@ def translate_batch(
     - Tokenize sentences into token strings
     - Call translator.translate_batch with target_prefix and beam_size
     - Decode output tokens to string
+    - Logs progress and timing
     """
+    num = len(sentences)
+    print(f"[mt] Start translation of {num} segments with beam={beam}...")
+    t0 = time.time()
+
     # Tokenize into string tokens
     tokenized: List[List[str]] = [tokenizer.tokenize(p) for p in sentences]
 
@@ -95,19 +103,24 @@ def translate_batch(
         target_prefix=prefix,
         beam_size=beam,
     )
+    duration = time.time() - t0
+    print(f"[mt] Raw translation done in {duration:.2f}s")
 
     # Decode top hypotheses: list of token strings -> string
     translations: List[str] = []
-    for res in results:
+    for idx, res in enumerate(results, 1):
         tokens = res.hypotheses[0]
         text = tokenizer.convert_tokens_to_string(tokens)
         translations.append(text)
+        if idx % 10 == 0 or idx == num:
+            print(f"[mt] Decoded {idx}/{num} segments")
 
+    print(f"[mt] Total translation+decode time: {time.time() - t0:.2f}s")
     return translations
 
 
 if __name__ == "__main__":
-    import argparse, sys, time
+    import argparse, sys
 
     parser = argparse.ArgumentParser(description="Test loading translator and translating a sample.")
     parser.add_argument("model_dir", help="Path to CTranslate2 model")
@@ -119,9 +132,6 @@ if __name__ == "__main__":
     except Exception as e:
         sys.exit(f"Error loading translator: {e}")
 
-    print(f"✓ Translator loaded (device: {tr.device}) – tokenizer vocab size: {len(tok)}")
     sample = ["Bonjour le monde.", "Comment ça va ?"]
-    start = time.time()
     out = translate_batch(sample, tr, tok, beam=args.beam)
     print(f"Translations: {out}")
-    print(f"Time: {time.time() - start:.2f}s")
