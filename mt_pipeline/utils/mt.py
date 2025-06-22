@@ -104,9 +104,10 @@ def translate_batch(
         print(f"[mt] Translating segment {idx}/{num} ({len(tokens)} tokens)")
         t0 = time.time()
         # NLLB requires target_prefix token to indicate language
+                # Call translate_batch with a batch of one sequence
         result = translator.translate_batch(
-            tokens,
-            target_prefix=[["<2spa_Latn>"]],
+            [tokens],  # list of token sequences
+            target_prefix=[['<2spa_Latn>']],
             beam_size=beam,
         )
         duration = time.time() - t0
