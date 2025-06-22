@@ -1,96 +1,126 @@
 # utils/mt.py
 """Utility helpers around CTranslate2 + NLLB.
 
-For Option B we commençons par *load_translator* :
-    >>> from utils.mt import load_translator
-    >>> translator, tokenizer = load_translator("/home/you/models/nllb-3.3B-int8")
+Provides:
+    - load_translator: load CTranslate2 translator and HF tokenizer.
+    - translate_batch: wrapper for batch translation using tokenizer + translator.
 
-The translator is a ctranslate2.Translator ready for CPU (or GPU if
-available).  The tokenizer is the Hugging Face AutoTokenizer from the original
-NLLB checkpoint, so we can use it to encode/decode segments.
+Usage:
+    from mt_pipeline.utils.mt import load_translator, translate_batch
+
+Functions assume you have converted an NLLB-200 model to CTranslate2 format.
 """
 
-from __future__ import annotations
-
-import os
 from pathlib import Path
-from typing import Tuple
+from typing import Tuple, List
 
 import ctranslate2 as ct2
 from transformers import AutoTokenizer
 
-# Default NLLB repo used only for the tokenizer (weights are not downloaded)
+# HF repo for tokenizer vocab
 _DEFAULT_TOKENIZER_REPO = "facebook/nllb-200-3.3B"
 
 
 def _detect_device() -> str:
-    """Return "cuda" if a compatible GPU is visible to CTranslate2, else "cpu"."""
-    if ct2.get_supported_devices() and "cuda" in ct2.get_supported_devices():
-        return "cuda"
-    return "cpu"
+    """Return 'cuda' if CUDA is available for CTranslate2, else 'cpu'."""
+    try:
+        # Newer CTranslate2 versions
+        devices = ct2.available_devices()
+    except AttributeError:
+        # Fallback for older versions
+        try:
+            devices = ct2.Device.get_supported_devices()
+        except Exception:
+            return "cpu"
+    return "cuda" if "cuda" in devices else "cpu"
 
 
 def load_translator(
     model_dir: str | Path,
-    *,
     beam: int = 5,
     device: str | None = None,
     inter_threads: int | None = None,
     intra_threads: int | None = None,
 ) -> Tuple[ct2.Translator, AutoTokenizer]:
-    """Return a *(translator, tokenizer)* tuple ready for batch translation.
+    """Load a CTranslate2 translator and a HF tokenizer.
 
     Parameters
     ----------
-    model_dir : str | Path
-        Path to the CTranslate2‑converted NLLB model (e.g. `~/models/nllb-3.3B-int8`).
-    beam : int, default=5
-        Beam size used for `translate_batch` (kept in the translator object).
-    device : {"cuda", "cpu", "auto"}, optional
-        "auto" (None) chooses GPU if available, else CPU.
-    inter_threads / intra_threads : int, optional
-        Parallelism knobs for CPU (ignored on GPU).  If omitted, CTranslate2
-        picks sensible defaults (inter = n_physical_cores // 2).
-    """
-    model_dir = Path(model_dir).expanduser().resolve()
-    if not model_dir.exists():
-        raise FileNotFoundError(f"Model directory not found: {model_dir}")
+    model_dir: Path to CTranslate2 model directory
+    beam: beam size for translation
+    device: 'cpu', 'cuda', or None for auto
+    inter_threads, intra_threads: CPU threading config
 
-    if device is None or device == "auto":
-        device = _detect_device()
+    Returns
+    -------
+    (translator, tokenizer)
+    """
+    model_path = Path(model_dir).expanduser().resolve()
+    if not model_path.exists():
+        raise FileNotFoundError(f"Model directory not found: {model_path}")
+
+    if device is None:
+        device_choice = _detect_device()
+    else:
+        device_choice = device
 
     translator = ct2.Translator(
-        str(model_dir),
-        device=device,
+        str(model_path),
+        device=device_choice,
         device_index=0,
-        inter_threads=inter_threads or 0,  # 0 lets CT2 choose
+        inter_threads=inter_threads or 0,
         intra_threads=intra_threads or 0,
-        compute_type="int8",  # the model is already quantised
+        compute_type="int8",
     )
     translator.beam_size = beam
 
-    # We do *not* download the HF weights; AutoTokenizer only needs the vocab
-    # files (20 MB).  They are cached in ~/.cache/huggingface.
     tokenizer = AutoTokenizer.from_pretrained(_DEFAULT_TOKENIZER_REPO)
 
     return translator, tokenizer
 
 
-if __name__ == "__main__":  # rudimentary self‑test
-    import argparse, textwrap, sys
+def translate_batch(
+    sentences: List[str],
+    translator: ct2.Translator,
+    tokenizer: AutoTokenizer,
+    source_lang: str = "fra_Latn",
+    target_lang: str = "spa_Latn",
+) -> List[str]:
+    """Translate a list of sentences/paragraphs.
 
-    parser = argparse.ArgumentParser(description="Quick smoke‑test for load_translator")
-    parser.add_argument("model_dir", help="Path to the CTranslate2 model")
+    - Tokenize sentences
+    - Call translator.translate_batch
+    - Decode output
+    """
+    # Encode all paragraphs
+    encoded = [tokenizer.encode(p, add_special_tokens=False) for p in sentences]
+    # Translate
+    results = translator.translate_batch(
+        encoded,
+        source_lang=source_lang,
+        target_lang=target_lang,
+    )
+    # Decode top hypotheses
+    translations = [tokenizer.decode(out.hypotheses[0], skip_special_tokens=True)
+                    for out in results]
+    return translations
+
+
+if __name__ == "__main__":
+    import argparse, sys, time
+
+    parser = argparse.ArgumentParser(description="Test loading translator and translating a sample.")
+    parser.add_argument("model_dir", help="Path to CTranslate2 model")
     args = parser.parse_args()
 
     try:
         tr, tok = load_translator(args.model_dir)
-    except Exception as exc:
-        sys.exit(f"Error: {exc}")
+    except Exception as e:
+        sys.exit(f"Error loading translator: {e}")
 
-    print("✓ Translator loaded (device:", tr.device, ") – vocab size:", len(tok), ")")
-    print(textwrap.dedent("""
-        You can now import this function from your scripts:
-            from utils.mt import load_translator
-            translator, tokenizer = load_translator("/path/to/model")
-    """))
+    print(f"✓ Translator loaded (device: {tr.device}) – tokenizer vocab size: {len(tok)}")
+    sample = ["Bonjour le monde.", "Comment ça va ?"]
+    start = time.time()
+    out = translate_batch(sample, tr, tok)
+    print(f"Translations: {out}")
+    print(f"Time: {time.time() - start:.2f}s")
