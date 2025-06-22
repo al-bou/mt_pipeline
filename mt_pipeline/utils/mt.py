@@ -56,7 +56,14 @@ def load_translator(
     if not model_path.exists():
         raise FileNotFoundError(f"Model directory not found: {model_path}")
 
-    device_choice = device if device else _detect_device()
+    # List supported devices for debugging
+    try:
+        supported = ct2.available_devices()
+    except AttributeError:
+        supported = ct2.Device.get_supported_devices() if hasattr(ct2, 'Device') else []
+    print(f"[mt] Supported devices: {supported}")
+
+    device_choice = device if device else ("cuda" if "cuda" in supported else "cpu")
     print(f"[mt] Loading translator on device: {device_choice}")
 
     translator = ct2.Translator(
