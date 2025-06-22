@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Éditeur
+.vscode/
+.idea/
+
+# Secrets (jamais versionnés)
+config/settings.yaml
+.env
+
+# Artefacts éventuels
+logs/
+dist/

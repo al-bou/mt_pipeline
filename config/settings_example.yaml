@@ -1,0 +1,6 @@
+model_dir: /home/USER/models/nllb-3.3B-int8
+chunk_size: 1500
+beam_size: 5
+comet_threshold: 0.75
+deepl_key: "PASTE_YOURS_HERE"
+openai_key: "PASTE_YOURS_HERE"
