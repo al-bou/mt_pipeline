@@ -80,15 +80,16 @@ def translate_batch(
     """Translate a list of sentences/paragraphs using given beam size.
 
     - Tokenize sentences into token strings
-    - Call translator.translate_batch with beam_size
+    - Call translator.translate_batch with target_prefix and beam_size
     - Decode output tokens to string
     """
     # Tokenize into string tokens
     tokenized: List[List[str]] = [tokenizer.tokenize(p) for p in sentences]
 
-    # Translate with beam
-            # Prefix with target language code for NLLB
-    prefix = [[f"<2spa_Latn>"]] * len(tokenized)
+    # Prefix indicating target language for NLLB
+    prefix: List[List[str]] = [["<2spa_Latn>"] for _ in tokenized]
+
+    # Translate with beam and prefix
     results = translator.translate_batch(
         tokenized,
         target_prefix=prefix,
@@ -99,7 +100,6 @@ def translate_batch(
     translations: List[str] = []
     for res in results:
         tokens = res.hypotheses[0]
-        # Convert token list back to text
         text = tokenizer.convert_tokens_to_string(tokens)
         translations.append(text)
 
