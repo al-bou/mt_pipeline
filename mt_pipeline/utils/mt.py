@@ -87,8 +87,11 @@ def translate_batch(
     tokenized: List[List[str]] = [tokenizer.tokenize(p) for p in sentences]
 
     # Translate with beam
+            # Prefix with target language code for NLLB
+    prefix = [[f"<2spa_Latn>"]] * len(tokenized)
     results = translator.translate_batch(
         tokenized,
+        target_prefix=prefix,
         beam_size=beam,
     )
 
