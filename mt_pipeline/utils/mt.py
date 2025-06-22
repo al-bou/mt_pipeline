@@ -75,8 +75,6 @@ def translate_batch(
     sentences: List[str],
     translator: ct2.Translator,
     tokenizer: AutoTokenizer,
-    source_lang: str = "fra_Latn",
-    target_lang: str = "spa_Latn",
     beam: int = 5,
 ) -> List[str]:
     """Translate a list of sentences/paragraphs using given beam size.
@@ -85,13 +83,11 @@ def translate_batch(
     - Call translator.translate_batch with beam_size
     - Decode output
     """
-    # Encode paragraphs
+    # Encode paragraphs: list of token ids
     encoded = [tokenizer.encode(p, add_special_tokens=False) for p in sentences]
     # Translate with beam
     results = translator.translate_batch(
         encoded,
-        source_lang=source_lang,
-        target_lang=target_lang,
         beam_size=beam,
     )
     # Decode top hypotheses
