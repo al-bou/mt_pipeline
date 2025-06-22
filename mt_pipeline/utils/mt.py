@@ -27,10 +27,8 @@ def _detect_device() -> str:
     try:
         devices = ct2.available_devices()
     except AttributeError:
-        try:
-            devices = ct2.Device.get_supported_devices()
-        except Exception:
-            return "cpu"
+        devices = []
+    return "cuda" if "cuda" in devices else "cpu" "cpu"
     return "cuda" if "cuda" in devices else "cpu"
 
 
@@ -56,11 +54,11 @@ def load_translator(
     if not model_path.exists():
         raise FileNotFoundError(f"Model directory not found: {model_path}")
 
-    # List supported devices for debugging
+        # List supported devices for debugging using available_devices()
     try:
         supported = ct2.available_devices()
     except AttributeError:
-        supported = ct2.Device.get_supported_devices() if hasattr(ct2, 'Device') else []
+        supported = []
     print(f"[mt] Supported devices: {supported}")
 
     device_choice = device if device else ("cuda" if "cuda" in supported else "cpu")
