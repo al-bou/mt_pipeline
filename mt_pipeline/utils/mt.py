@@ -28,7 +28,6 @@ def _detect_device() -> str:
         devices = ct2.available_devices()
     except AttributeError:
         devices = []
-    return "cuda" if "cuda" in devices else "cpu" "cpu"
     return "cuda" if "cuda" in devices else "cpu"
 
 
@@ -54,14 +53,14 @@ def load_translator(
     if not model_path.exists():
         raise FileNotFoundError(f"Model directory not found: {model_path}")
 
-        # List supported devices for debugging using available_devices()
+    # Detect supported devices
     try:
         supported = ct2.available_devices()
     except AttributeError:
         supported = []
     print(f"[mt] Supported devices: {supported}")
 
-    device_choice = device if device else ("cuda" if "cuda" in supported else "cpu")
+    device_choice = device if device else (_detect_device())
     print(f"[mt] Loading translator on device: {device_choice}")
 
     translator = ct2.Translator(
@@ -100,15 +99,14 @@ def translate_batch(
     # Tokenize once
     tokenized: List[List[str]] = [tokenizer.tokenize(p) for p in sentences]
 
+    # Translate each segment individually with logs
     for idx, tokens in enumerate(tokenized, start=1):
         print(f"[mt] Translating segment {idx}/{num} ({len(tokens)} tokens)")
         t0 = time.time()
         # NLLB requires target_prefix token to indicate language
-        prefix = [["<2spa_Latn>"]]
-        # translate single segment
         result = translator.translate_batch(
-            [tokens],
-            target_prefix=prefix,
+            tokens,
+            target_prefix=[["<2spa_Latn>"]],
             beam_size=beam,
         )
         duration = time.time() - t0
@@ -121,6 +119,7 @@ def translate_batch(
     print(f"[mt] All segments translated in {time.time() - t_total_start:.2f}s")
     return translations
 
+
 if __name__ == "__main__":
     import argparse, sys
 
@@ -130,7 +129,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     try:
-        tr, tok = load_translator(args.model_dir)
+        tr, tok = load_translator(args.model_dir, device=None)
     except Exception as e:
         sys.exit(f"Error loading translator: {e}")
 
