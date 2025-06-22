@@ -79,20 +79,27 @@ def translate_batch(
 ) -> List[str]:
     """Translate a list of sentences/paragraphs using given beam size.
 
-    - Tokenize sentences
+    - Tokenize sentences into token strings
     - Call translator.translate_batch with beam_size
-    - Decode output
+    - Decode output tokens to string
     """
-    # Encode paragraphs: list of token ids
-    encoded = [tokenizer.encode(p, add_special_tokens=False) for p in sentences]
+    # Tokenize into string tokens
+    tokenized: List[List[str]] = [tokenizer.tokenize(p) for p in sentences]
+
     # Translate with beam
     results = translator.translate_batch(
-        encoded,
+        tokenized,
         beam_size=beam,
     )
-    # Decode top hypotheses
-    translations = [tokenizer.decode(out.hypotheses[0], skip_special_tokens=True)
-                    for out in results]
+
+    # Decode top hypotheses: list of token strings -> string
+    translations: List[str] = []
+    for res in results:
+        tokens = res.hypotheses[0]
+        # Convert token list back to text
+        text = tokenizer.convert_tokens_to_string(tokens)
+        translations.append(text)
+
     return translations
 
 
