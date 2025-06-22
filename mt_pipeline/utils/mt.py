@@ -12,7 +12,7 @@ Functions assume you have converted an NLLB-200 model to CTranslate2 format.
 """
 
 from pathlib import Path
-from typing import Tuple, List
+from typing import Tuple, List, Optional
 
 import ctranslate2 as ct2
 from transformers import AutoTokenizer
@@ -24,10 +24,8 @@ _DEFAULT_TOKENIZER_REPO = "facebook/nllb-200-3.3B"
 def _detect_device() -> str:
     """Return 'cuda' if CUDA is available for CTranslate2, else 'cpu'."""
     try:
-        # Newer CTranslate2 versions
         devices = ct2.available_devices()
     except AttributeError:
-        # Fallback for older versions
         try:
             devices = ct2.Device.get_supported_devices()
         except Exception:
@@ -37,17 +35,15 @@ def _detect_device() -> str:
 
 def load_translator(
     model_dir: str | Path,
-    beam: int = 5,
-    device: str | None = None,
-    inter_threads: int | None = None,
-    intra_threads: int | None = None,
+    device: Optional[str] = None,
+    inter_threads: Optional[int] = None,
+    intra_threads: Optional[int] = None,
 ) -> Tuple[ct2.Translator, AutoTokenizer]:
     """Load a CTranslate2 translator and a HF tokenizer.
 
     Parameters
     ----------
     model_dir: Path to CTranslate2 model directory
-    beam: beam size for translation
     device: 'cpu', 'cuda', or None for auto
     inter_threads, intra_threads: CPU threading config
 
@@ -59,10 +55,7 @@ def load_translator(
     if not model_path.exists():
         raise FileNotFoundError(f"Model directory not found: {model_path}")
 
-    if device is None:
-        device_choice = _detect_device()
-    else:
-        device_choice = device
+    device_choice = device if device else _detect_device()
 
     translator = ct2.Translator(
         str(model_path),
@@ -72,7 +65,6 @@ def load_translator(
         intra_threads=intra_threads or 0,
         compute_type="int8",
     )
-    translator.beam_size = beam
 
     tokenizer = AutoTokenizer.from_pretrained(_DEFAULT_TOKENIZER_REPO)
 
@@ -85,20 +77,22 @@ def translate_batch(
     tokenizer: AutoTokenizer,
     source_lang: str = "fra_Latn",
     target_lang: str = "spa_Latn",
+    beam: int = 5,
 ) -> List[str]:
-    """Translate a list of sentences/paragraphs.
+    """Translate a list of sentences/paragraphs using given beam size.
 
     - Tokenize sentences
-    - Call translator.translate_batch
+    - Call translator.translate_batch with beam_size
     - Decode output
     """
-    # Encode all paragraphs
+    # Encode paragraphs
     encoded = [tokenizer.encode(p, add_special_tokens=False) for p in sentences]
-    # Translate
+    # Translate with beam
     results = translator.translate_batch(
         encoded,
         source_lang=source_lang,
         target_lang=target_lang,
+        beam_size=beam,
     )
     # Decode top hypotheses
     translations = [tokenizer.decode(out.hypotheses[0], skip_special_tokens=True)
@@ -111,6 +105,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Test loading translator and translating a sample.")
     parser.add_argument("model_dir", help="Path to CTranslate2 model")
+    parser.add_argument("--beam", type=int, default=5, help="Beam size for translation batch.")
     args = parser.parse_args()
 
     try:
@@ -121,6 +116,6 @@ if __name__ == "__main__":
     print(f"✓ Translator loaded (device: {tr.device}) – tokenizer vocab size: {len(tok)}")
     sample = ["Bonjour le monde.", "Comment ça va ?"]
     start = time.time()
-    out = translate_batch(sample, tr, tok)
+    out = translate_batch(sample, tr, tok, beam=args.beam)
     print(f"Translations: {out}")
     print(f"Time: {time.time() - start:.2f}s")
