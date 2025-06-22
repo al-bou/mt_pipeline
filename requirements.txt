@@ -1,6 +1,6 @@
 ctranslate2==3.22.0
 transformers==4.42.0
-sentencepiece==0.1.99
+sentencepiece>=0.2.0,<0.3.0
 unbabel-comet==2.2.6
 transquest==1.0.0
 python-docx==1.1.0          # si vous lisez du .docx
