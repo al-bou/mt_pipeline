@@ -83,41 +83,38 @@ def translate_batch(
     """Translate a list of sentences/paragraphs using given beam size.
 
     - Tokenize sentences into token strings
-    - Call translator.translate_batch with target_prefix and beam_size
+    - Call translator.translate_batch per segment for granular logging
     - Decode output tokens to string
     - Logs progress and timing
     """
     num = len(sentences)
-    print(f"[mt] Start translation of {num} segments with beam={beam}...")
-    t0 = time.time()
+    print(f"[mt] Starting granular translation of {num} segments with beam={beam}...")
+    t_total_start = time.time()
+    translations: List[str] = []
 
-    # Tokenize into string tokens
+    # Tokenize once
     tokenized: List[List[str]] = [tokenizer.tokenize(p) for p in sentences]
 
-    # Prefix indicating target language for NLLB
-    prefix: List[List[str]] = [["<2spa_Latn>"] for _ in tokenized]
-
-    # Translate with beam and prefix
-    results = translator.translate_batch(
-        tokenized,
-        target_prefix=prefix,
-        beam_size=beam,
-    )
-    duration = time.time() - t0
-    print(f"[mt] Raw translation done in {duration:.2f}s")
-
-    # Decode top hypotheses: list of token strings -> string
-    translations: List[str] = []
-    for idx, res in enumerate(results, 1):
-        tokens = res.hypotheses[0]
-        text = tokenizer.convert_tokens_to_string(tokens)
+    for idx, tokens in enumerate(tokenized, start=1):
+        print(f"[mt] Translating segment {idx}/{num} ({len(tokens)} tokens)")
+        t0 = time.time()
+        # NLLB requires target_prefix token to indicate language
+        prefix = [["<2spa_Latn>"]]
+        # translate single segment
+        result = translator.translate_batch(
+            [tokens],
+            target_prefix=prefix,
+            beam_size=beam,
+        )
+        duration = time.time() - t0
+        # Decode top hypothesis
+        out_tokens = result[0].hypotheses[0]
+        text = tokenizer.convert_tokens_to_string(out_tokens)
         translations.append(text)
-        if idx % 10 == 0 or idx == num:
-            print(f"[mt] Decoded {idx}/{num} segments")
+        print(f"[mt] Segment {idx} done in {duration:.2f}s")
 
-    print(f"[mt] Total translation+decode time: {time.time() - t0:.2f}s")
+    print(f"[mt] All segments translated in {time.time() - t_total_start:.2f}s")
     return translations
-
 
 if __name__ == "__main__":
     import argparse, sys
