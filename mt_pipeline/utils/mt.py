@@ -95,40 +95,36 @@ def _find_lang_tag(tok, code: str) -> str:
 # ---------------------------------------------------------------------------
 # Translation wrapper
 # ---------------------------------------------------------------------------
-
 def translate_batch(
     sentences: List[str],
     translator: ct2.Translator,
     tokenizer,
     *,
     beam: int = 5,
-    src_lang: str = _SUPPORTED_SOURCES[0],
-    tgt_lang: str = _SUPPORTED_TARGETS[0],
+    src_lang: str = "fra_Latn",
+    tgt_lang: str = "spa_Latn",
 ) -> List[str]:
-    """Translate *sentences* using NLLB and CTranslate2."""
+    # 1) Tokenisation sans balise
+    inputs = [tokenizer.tokenize(s) for s in sentences]
 
-    src_tag = _find_lang_tag(tokenizer, src_lang)
-    tgt_tag = _find_lang_tag(tokenizer, tgt_lang)
-
-    batch_tokens = [[src_tag] + tokenizer.tokenize(s) for s in sentences]
-
+    # 2) Traduction – on laisse CT2 ajouter les bons tokens langue
     results = translator.translate_batch(
-    batch_tokens,
-    beam_size=beam,
-    target_prefix=[[tgt_tag] for _ in sentences],
-    end_token="</s>",               # stop generation at EOS
-    no_repeat_ngram_size=3,          # curb repetitions
+        inputs,
+        beam_size=beam,
+        source_lang=src_lang,
+        target_lang=tgt_lang,
+        max_decoding_length=256,
+        no_repeat_ngram_size=3,
+        end_token="</s>",
     )
 
-    outputs: List[str] = []
+    # 3) Détokenisation
+    outs = []
     for r in results:
-        tokens = r.hypotheses[0]
-        # Remove leading language tag if still present
-        if tokens and tokens[0] in {tgt_tag, src_tag}:
-            tokens = tokens[1:]
-        ids = tokenizer.convert_tokens_to_ids(tokens)
-        outputs.append(tokenizer.decode(ids, skip_special_tokens=True))
-    return outputs
+        toks = r.hypotheses[0]
+        outs.append(tokenizer.convert_tokens_to_string(toks).replace(" </s>", "").strip())
+    return outs
+
 
 # ---------------------------------------------------------------------------
 # CLI
