@@ -60,16 +60,24 @@ def _get_devices() -> List[str]:
 
 
 def _detect_device() -> str:
+    """Auto‑select CUDA when available."""
     return "cuda" if "cuda" in _get_devices() else "cpu"
 
 # ---------------------------------------------------------------------------
 # Translator / Tokenizer loaders
 # ---------------------------------------------------------------------------
 
-def load_translator(model_dir: Path | str, device: str | None = None, *, int8: bool = True):
-    """Return (ctranslate2.Translator, transformers.Tokenizer)."""
+def load_translator(
+    model_dir: Path | str,
+    device: str | None = None,
+    *,
+    int8: bool = True,
+):
+    """Return a ``(Translator, Tokenizer)`` tuple ready to use."""
     device = device or _detect_device()
-    translator = ct2.Translator(str(model_dir), device=device, compute_type="int8" if int8 else "auto")
+    translator = ct2.Translator(
+        str(model_dir), device=device, compute_type="int8" if int8 else "auto"
+    )
     tokenizer = AutoTokenizer.from_pretrained(_DEFAULT_TOKENIZER_REPO)
     return translator, tokenizer
 
@@ -93,7 +101,6 @@ def _find_lang_tag(tok, code: str) -> str:
     raise ValueError(f"Cannot find language tag for {code} in tokenizer")
 
 # ---------------------------------------------------------------------------
-# ---------------------------------------------------------------------------
 # Translation wrapper
 # ---------------------------------------------------------------------------
 
@@ -106,21 +113,20 @@ def translate_batch(
     src_lang: str = _SUPPORTED_SOURCES[0],
     tgt_lang: str = _SUPPORTED_TARGETS[0],
 ) -> List[str]:
-        """Translate *sentences* using NLLB and CTranslate2.
+    """Translate *sentences* with proper BOS/src/tgt prompts.
 
-    The encoder expects the sequence: ``<s> <src_lang> <tokens>`` and
-    the decoder is primed with ``<s> <tgt_lang>``.  Missing the BOS token
-    or the language tags often causes infinite repetition.  This helper
-    enforces the correct prompts and sets reasonable decoding guards
-    (EOS, *no‑repeat‑ngram*).
+    The encoder expects ``<s> <src_lang> tokens`` and the decoder is
+    primed with ``<s> <tgt_lang>``.  Supplying BOS twice (or omitting it)
+    can cause degenerate repetition; this helper enforces a correct
+    prompt and protects with *no‑repeat‑ngram*.
     """
 
-        # Resolve BOS token reliably
+    # Resolve BOS token reliably
     if tokenizer.bos_token_id is not None:
         bos = tokenizer.convert_ids_to_tokens(tokenizer.bos_token_id)
     else:
-        # Fallback to textual "<s>" which exists in NLLB tokenizer vocab
-        bos = "<s>"
+        bos = "<s>"  # fallback textual token present in NLLB vocab
+
     src_tag = _find_lang_tag(tokenizer, src_lang)
     tgt_tag = _find_lang_tag(tokenizer, tgt_lang)
 
@@ -129,4 +135,47 @@ def translate_batch(
     results = translator.translate_batch(
         batch_tokens,
         beam_size=beam,
-                target_prefix=[[tgt_tag] for _ in sentences],  # BOS implicit for decoder
+        target_prefix=[[tgt_tag] for _ in sentences],  # BOS implicit in decoder
+        end_token="</s>",
+        no_repeat_ngram_size=3,
+        max_decoding_length=256,
+    )
+
+    outputs: List[str] = []
+    for r in results:
+        tokens = r.hypotheses[0]
+        # Remove leading BOS/lang tags if present
+        while tokens and tokens[0] in {bos, tgt_tag, src_tag}:
+            tokens.pop(0)
+        outputs.append(tokenizer.convert_tokens_to_string(tokens).strip())
+    return outputs
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+def _cli() -> None:
+    parser = argparse.ArgumentParser("Translate with NLLB via CTranslate2")
+    parser.add_argument("model_dir", type=Path, help="Path to CTranslate2 model")
+    parser.add_argument("--beam", type=int, default=5, help="Beam size (default 5)")
+    parser.add_argument("--device", choices=["cpu", "cuda"], help="Force device")
+    parser.add_argument("--text", nargs="*", help="Sentences to translate")
+    args = parser.parse_args()
+
+    translator, tokenizer = load_translator(args.model_dir, args.device)
+    sentences = args.text if args.text else [l.strip() for l in sys.stdin if l.strip()]
+    if not sentences:
+        print("[mt] No input sentences", file=sys.stderr)
+        sys.exit(1)
+
+    t0 = time.perf_counter()
+    outs = translate_batch(sentences, translator, tokenizer, beam=args.beam)
+    dt = time.perf_counter() - t0
+
+    for line in outs:
+        print(line)
+    print(f"[mt] Done ({len(sentences)} segs, {dt:.2f}s)", file=sys.stderr)
+
+
+if __name__ == "__main__":
+    _cli()
