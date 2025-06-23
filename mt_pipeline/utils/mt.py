@@ -1,15 +1,15 @@
 # utils/mt.py
 """Utility helpers around CTranslate2 + NLLB‑200.
 
-Usage (Python ≥3.8)
--------------------
+Example (Python ≥3.8)
+---------------------
 Translate one or several sentences:
 
     python -m mt_pipeline.utils.mt <MODEL_DIR> \
         --device cuda --beam 5 \
         --text "Bonjour le monde" "Encore une phrase"
 
-If *--text* is omitted the script reads one sentence per line from STDIN.
+If *--text* is omitted, the script reads one sentence per line from STDIN.
 The module also exposes ``load_translator`` and ``translate_batch`` for
 programmatic use.
 """
@@ -48,7 +48,7 @@ def _get_devices() -> List[str]:
         return ct2.get_supported_devices()
     if hasattr(ct2, "Device") and hasattr(ct2.Device, "list_devices"):
         return ct2.Device.list_devices()
-    # Fallback: check linked libraries
+    # Fallback: parse ldd output for CUDA libs
     so = Path(ct2.__file__).with_suffix(".so")
     try:
         out = subprocess.check_output(["ldd", so], text=True)
@@ -95,36 +95,40 @@ def _find_lang_tag(tok, code: str) -> str:
 # ---------------------------------------------------------------------------
 # Translation wrapper
 # ---------------------------------------------------------------------------
+
 def translate_batch(
     sentences: List[str],
     translator: ct2.Translator,
     tokenizer,
     *,
     beam: int = 5,
-    src_lang: str = "fra_Latn",
-    tgt_lang: str = "spa_Latn",
+    src_lang: str = _SUPPORTED_SOURCES[0],
+    tgt_lang: str = _SUPPORTED_TARGETS[0],
 ) -> List[str]:
-    # 1) Tokenisation sans balise
-    inputs = [tokenizer.tokenize(s) for s in sentences]
+    """Translate *sentences* using NLLB and CTranslate2."""
 
-    # 2) Traduction – on laisse CT2 ajouter les bons tokens langue
+    src_tag = _find_lang_tag(tokenizer, src_lang)
+    tgt_tag = _find_lang_tag(tokenizer, tgt_lang)
+
+    batch_tokens = [[src_tag] + tokenizer.tokenize(s) for s in sentences]
+
     results = translator.translate_batch(
-        inputs,
+        batch_tokens,
         beam_size=beam,
-        source_lang=src_lang,
-        target_lang=tgt_lang,
-        max_decoding_length=256,
-        no_repeat_ngram_size=3,
-        end_token="</s>",
+        target_prefix=[[tgt_tag] for _ in sentences],
+        end_token="</s>",               # stop generation at EOS
+        no_repeat_ngram_size=3,          # curb repetitions
     )
 
-    # 3) Détokenisation
-    outs = []
+    outputs: List[str] = []
     for r in results:
-        toks = r.hypotheses[0]
-        outs.append(tokenizer.convert_tokens_to_string(toks).replace(" </s>", "").strip())
-    return outs
-
+        tokens = r.hypotheses[0]
+        # Remove leading language tag if still present
+        if tokens and tokens[0] in {tgt_tag, src_tag}:
+            tokens = tokens[1:]
+        ids = tokenizer.convert_tokens_to_ids(tokens)
+        outputs.append(tokenizer.decode(ids, skip_special_tokens=True))
+    return outputs
 
 # ---------------------------------------------------------------------------
 # CLI
