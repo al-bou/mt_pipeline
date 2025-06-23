@@ -1,21 +1,24 @@
 # utils/mt.py
 """Utility helpers around CTranslate2 + NLLB‑200.
 
-Run as a module  (Python ≥3.8):
+Usage (Python ≥3.8)
+-------------------
+Translate one or several sentences:
 
-    python -m mt_pipeline.utils.mt <MODEL_DIR> [--beam 5] [--device cuda] \
-        [--text "Bonjour" "Une autre phrase"]
+    python -m mt_pipeline.utils.mt <MODEL_DIR> \
+        --device cuda --beam 5 \
+        --text "Bonjour le monde" "Encore une phrase"
 
-• If *--text* is omitted, the module reads one sentence per line from STDIN.
-• The script prints the translated sentences to STDOUT in the same order.
-
-This file also exposes the helper functions ``load_translator`` and
-``translate_batch`` for programmatic use.
+If *--text* is omitted the script reads one sentence per line from STDIN.
+The module also exposes ``load_translator`` and ``translate_batch`` for
+programmatic use.
 """
 
 from __future__ import annotations
 
 import argparse
+import re
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -24,19 +27,19 @@ from typing import List, Tuple
 import ctranslate2 as ct2
 from transformers import AutoTokenizer
 
-# ----------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # Constants
-# ----------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 _DEFAULT_TOKENIZER_REPO = "facebook/nllb-200-3.3B"
 _SUPPORTED_SOURCES: Tuple[str, ...] = ("fra_Latn",)
 _SUPPORTED_TARGETS: Tuple[str, ...] = ("spa_Latn",)
 
-# ----------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # Device helpers
-# ----------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 
 def _get_devices() -> List[str]:
-    """Return a list like ``['cpu', 'cuda']`` depending on installed CT2."""
+    """Return e.g. ``['cpu', 'cuda']`` depending on CT2 version."""
     if hasattr(ct2, "available_devices"):
         return ct2.available_devices()
     if hasattr(ct2, "list_devices"):
@@ -45,28 +48,53 @@ def _get_devices() -> List[str]:
         return ct2.get_supported_devices()
     if hasattr(ct2, "Device") and hasattr(ct2.Device, "list_devices"):
         return ct2.Device.list_devices()
-    if hasattr(ct2, "has_cuda") and ct2.has_cuda():
-        return ["cpu", "cuda"]
+    # Fallback: check linked libraries
+    so = Path(ct2.__file__).with_suffix(".so")
+    try:
+        out = subprocess.check_output(["ldd", so], text=True)
+        if re.search(r"libcu(blas|dart)", out):
+            return ["cpu", "cuda"]
+    except Exception:
+        pass
     return ["cpu"]
 
 
 def _detect_device() -> str:
     return "cuda" if "cuda" in _get_devices() else "cpu"
 
-# ----------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # Translator / Tokenizer loaders
-# ----------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 
-def load_translator(model_dir: Path | str, device: str | None = None, *, int8: bool = True) -> Tuple[ct2.Translator, "AutoTokenizer"]:
-    """Load a CTranslate2 Translator + HF tokenizer."""
+def load_translator(model_dir: Path | str, device: str | None = None, *, int8: bool = True):
+    """Return (ctranslate2.Translator, transformers.Tokenizer)."""
     device = device or _detect_device()
     translator = ct2.Translator(str(model_dir), device=device, compute_type="int8" if int8 else "auto")
     tokenizer = AutoTokenizer.from_pretrained(_DEFAULT_TOKENIZER_REPO)
     return translator, tokenizer
 
-# ----------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Helpers for language tags
+# ---------------------------------------------------------------------------
+
+def _find_lang_tag(tok, code: str) -> str:
+    """Return the special token corresponding to *code* in *tok*."""
+    # 1) Modern tokenizer exposes mapping id -> token
+    if hasattr(tok, "lang_code_to_id") and code in tok.lang_code_to_id:
+        return tok.convert_ids_to_tokens(tok.lang_code_to_id[code])
+    # 2) Search additional_special_tokens
+    for t in getattr(tok, "additional_special_tokens", []):
+        if code in t:
+            return t
+    # 3) Try common textual patterns
+    for cand in (f"<<{code}>>", f"<{code}>", f"__{code}__"):
+        if tok.convert_tokens_to_ids(cand) != tok.unk_token_id:
+            return cand
+    raise ValueError(f"Cannot find language tag for {code} in tokenizer")
+
+# ---------------------------------------------------------------------------
 # Translation wrapper
-# ----------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 
 def translate_batch(
     sentences: List[str],
@@ -79,75 +107,52 @@ def translate_batch(
 ) -> List[str]:
     """Translate *sentences* using NLLB and CTranslate2."""
 
-        # ------------------------------------------------------------------
-    # Build source tokens with correct language tag, compatible with
-    # both old (<fra_Latn>) and new (<<fra_Latn>>) NLLB tokenizers.
-    # ------------------------------------------------------------------
-    if hasattr(tokenizer, "lang_code_to_id") and tokenizer.lang_code_to_id:
-        # Recent Transformers provide the mapping directly
-        src_tag_id = tokenizer.lang_code_to_id[src_lang]
-        src_tag = tokenizer.convert_ids_to_tokens(src_tag_id)
-        tgt_tag = tokenizer.convert_ids_to_tokens(tokenizer.lang_code_to_id[tgt_lang])
-    else:
-        # Fallback: try the two textual forms
-        for cand in (f"<<{src_lang}>>", f"<{src_lang}>"):
-            if tokenizer.convert_tokens_to_ids(cand) != tokenizer.unk_token_id:
-                src_tag = cand
-                break
-        else:
-            raise ValueError(f"Cannot find language tag for {src_lang} in tokenizer")
-        tgt_tag = f"<{tgt_lang}>"
+    src_tag = _find_lang_tag(tokenizer, src_lang)
+    tgt_tag = _find_lang_tag(tokenizer, tgt_lang)
 
     batch_tokens = [[src_tag] + tokenizer.tokenize(s) for s in sentences]
 
-    translations = translator.translate_batch(
+    results = translator.translate_batch(
         batch_tokens,
         beam_size=beam,
         target_prefix=[[tgt_tag] for _ in sentences],
-    )(
-        batch_tokens,
-        beam_size=beam,
-        target_prefix=[[f"<{tgt_lang}>"] for _ in sentences],
     )
+
     outputs: List[str] = []
-    for t in translations:
-        # detokenise, skip language tag
-        ids = tokenizer.convert_tokens_to_ids(t.hypotheses[0])
-        text = tokenizer.decode(ids, skip_special_tokens=True)
-        outputs.append(text)
+    for r in results:
+        tokens = r.hypotheses[0]
+        # Remove leading language tag if still present
+        if tokens and tokens[0] in {tgt_tag, src_tag}:
+            tokens = tokens[1:]
+        ids = tokenizer.convert_tokens_to_ids(tokens)
+        outputs.append(tokenizer.decode(ids, skip_special_tokens=True))
     return outputs
 
-# ----------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # CLI
-# ----------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 
-
-def _cli():
+def _cli() -> None:
     p = argparse.ArgumentParser("Translate sentences with NLLB via CTranslate2")
-    p.add_argument("model_dir", type=Path, help="Path to the CTranslate2-converted model directory")
+    p.add_argument("model_dir", type=Path, help="Path to CTranslate2 model dir")
     p.add_argument("--beam", type=int, default=5, help="Beam size (default: 5)")
-    p.add_argument("--device", choices=["cpu", "cuda"], default=None, help="Force device (default: auto-detect)")
-
-    # one or many sentences provided on the command line
+    p.add_argument("--device", choices=["cpu", "cuda"], default=None, help="Force device (default: auto)")
     p.add_argument("--text", nargs="*", help="Sentences to translate; if omitted, read from stdin")
-
     args = p.parse_args()
 
     translator, tokenizer = load_translator(args.model_dir, args.device)
-    sentences = args.text if args.text else [line.strip() for line in sys.stdin if line.strip()]
-
+    sentences = args.text if args.text else [l.strip() for l in sys.stdin if l.strip()]
     if not sentences:
-        print("[mt] No input sentences provided", file=sys.stderr)
+        print("[mt] No input sentences", file=sys.stderr)
         sys.exit(1)
 
-    start = time.perf_counter()
+    t0 = time.perf_counter()
     outputs = translate_batch(sentences, translator, tokenizer, beam=args.beam)
-    elapsed = time.perf_counter() - start
+    dt = time.perf_counter() - t0
 
-    for t in outputs:
-        print(t)
-
-    print(f"[mt] Done ({len(sentences)} segments, {elapsed:.2f}s)", file=sys.stderr)
+    for o in outputs:
+        print(o)
+    print(f"[mt] Done ({len(sentences)} segs, {dt:.2f}s)", file=sys.stderr)
 
 
 if __name__ == "__main__":
