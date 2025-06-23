@@ -115,7 +115,12 @@ def translate_batch(
     reasonable decoding guards (EOS, no‑repeat 3‑gram).
     """
 
-    bos = tokenizer.bos_token or "<s>"
+        # Resolve BOS token reliably
+    if tokenizer.bos_token_id is not None:
+        bos = tokenizer.convert_ids_to_tokens(tokenizer.bos_token_id)
+    else:
+        # Fallback to textual "<s>" which exists in NLLB tokenizer vocab
+        bos = "<s>"
     src_tag = _find_lang_tag(tokenizer, src_lang)
     tgt_tag = _find_lang_tag(tokenizer, tgt_lang)
 
