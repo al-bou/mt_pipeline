@@ -106,13 +106,13 @@ def translate_batch(
     src_lang: str = _SUPPORTED_SOURCES[0],
     tgt_lang: str = _SUPPORTED_TARGETS[0],
 ) -> List[str]:
-    """Translate *sentences* using NLLB and CTranslate2.
+        """Translate *sentences* using NLLB and CTranslate2.
 
-    According to the NLLB paper and the CT2 conversion script, the input
-    should start with ``<s> <src_lang>`` and the decoder must be primed
-    with ``<s> <tgt_lang>``.  Providing only the language tag can lead to
-    degenerate repetitions.  This wrapper enforces the BOS token and sets
-    reasonable decoding guards (EOS, no‑repeat 3‑gram).
+    The encoder expects the sequence: ``<s> <src_lang> <tokens>`` and
+    the decoder is primed with ``<s> <tgt_lang>``.  Missing the BOS token
+    or the language tags often causes infinite repetition.  This helper
+    enforces the correct prompts and sets reasonable decoding guards
+    (EOS, *no‑repeat‑ngram*).
     """
 
         # Resolve BOS token reliably
@@ -129,48 +129,4 @@ def translate_batch(
     results = translator.translate_batch(
         batch_tokens,
         beam_size=beam,
-        target_prefix=[[bos, tgt_tag] for _ in sentences],
-        end_token="</s>",               # stop at EOS
-        no_repeat_ngram_size=3,          # curb repetitions
-        max_decoding_length=256,
-    )
-
-    outputs: List[str] = []
-    for r in results:
-        tokens = r.hypotheses[0]
-        # Drop possible leading BOS / language tags
-        while tokens and tokens[0] in {bos, tgt_tag, src_tag}:
-            tokens = tokens[1:]
-        ids = tokenizer.convert_tokens_to_ids(tokens)
-        outputs.append(tokenizer.decode(ids, skip_special_tokens=True))
-    return outputs
-
-# ---------------------------------------------------------------------------
-# CLI
-# ---------------------------------------------------------------------------
-
-def _cli() -> None:
-    p = argparse.ArgumentParser("Translate sentences with NLLB via CTranslate2")
-    p.add_argument("model_dir", type=Path, help="Path to CTranslate2 model dir")
-    p.add_argument("--beam", type=int, default=5, help="Beam size (default: 5)")
-    p.add_argument("--device", choices=["cpu", "cuda"], default=None, help="Force device (default: auto)")
-    p.add_argument("--text", nargs="*", help="Sentences to translate; if omitted, read from stdin")
-    args = p.parse_args()
-
-    translator, tokenizer = load_translator(args.model_dir, args.device)
-    sentences = args.text if args.text else [l.strip() for l in sys.stdin if l.strip()]
-    if not sentences:
-        print("[mt] No input sentences", file=sys.stderr)
-        sys.exit(1)
-
-    t0 = time.perf_counter()
-    outputs = translate_batch(sentences, translator, tokenizer, beam=args.beam)
-    dt = time.perf_counter() - t0
-
-    for o in outputs:
-        print(o)
-    print(f"[mt] Done ({len(sentences)} segs, {dt:.2f}s)", file=sys.stderr)
-
-
-if __name__ == "__main__":
-    _cli()
+                target_prefix=[[tgt_tag] for _ in sentences],  # BOS implicit for decoder
