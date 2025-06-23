@@ -113,42 +113,35 @@ def translate_batch(
     src_lang: str = _SUPPORTED_SOURCES[0],
     tgt_lang: str = _SUPPORTED_TARGETS[0],
 ) -> List[str]:
-    """Translate *sentences* with proper BOS/src/tgt prompts.
+    """Translate *sentences* with NLLB‑200 through CTranslate2.
 
-    The encoder expects ``<s> <src_lang> tokens`` and the decoder is
-    primed with ``<s> <tgt_lang>``.  Supplying BOS twice (or omitting it)
-    can cause degenerate repetition; this helper enforces a correct
-    prompt and protects with *no‑repeat‑ngram*.
+    The encoder prompt is just the source language tag, and the decoder
+    is primed with the target tag via *target_prefix*.  We also guard
+    against degenerate repetition with *no‑repeat‑ngram*.
     """
 
-        # NLLB expects the **language tag only** as first token; no explicit BOS.
     src_tag = _find_lang_tag(tokenizer, src_lang)
     tgt_tag = _find_lang_tag(tokenizer, tgt_lang)
 
+    # 1) Tokenise inputs with the source language tag in first position
     batch_tokens = [[src_tag] + tokenizer.tokenize(s) for s in sentences]
 
+    # 2) Run translation
     results = translator.translate_batch(
         batch_tokens,
         beam_size=beam,
         target_prefix=[[tgt_tag] for _ in sentences],
         max_decoding_length=256,
         no_repeat_ngram_size=3,
-    )(
-        batch_tokens,
-        beam_size=beam,
-        target_prefix=[[tgt_tag] for _ in sentences],  # BOS implicit in decoder
-        end_token="</s>",
-        no_repeat_ngram_size=3,
-        max_decoding_length=256,
     )
 
+    # 3) Detokenise outputs, dropping the leading language tag if present
     outputs: List[str] = []
-    for r in results:
-        tokens = r.hypotheses[0]
-        # Remove leading BOS/lang tags if present
-        while tokens and tokens[0] in {bos, tgt_tag, src_tag}:
-            tokens.pop(0)
-        outputs.append(tokenizer.convert_tokens_to_string(tokens).strip())
+    for res in results:
+        toks = res.hypotheses[0]
+        if toks and toks[0] == tgt_tag:
+            toks = toks[1:]
+        outputs.append(tokenizer.convert_tokens_to_string(toks).strip())
     return outputs
 
 # ---------------------------------------------------------------------------
