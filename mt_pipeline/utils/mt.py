@@ -25,18 +25,19 @@ _DEFAULT_TOKENIZER_REPO = "facebook/nllb-200-3.3B"
 def _get_devices() -> List[str]:
     """Return the list of devices reported by the installed CTranslate2.
 
-    Handles the API changes between versions (available_devices, list_devices, etc.).
+    Tries the different APIs that exist across versions. Falls back
+    to a simple check with ``has_cuda`` when none are present.
     """
     if hasattr(ct2, "available_devices"):
         return ct2.available_devices()
-    elif hasattr(ct2, "list_devices"):
+    if hasattr(ct2, "list_devices"):
         return ct2.list_devices()
-    elif hasattr(ct2, "get_supported_devices"):
+    if hasattr(ct2, "get_supported_devices"):
         return ct2.get_supported_devices()
-    elif hasattr(ct2, "Device") and hasattr(ct2.Device, "list_devices"):
-        return ct2.Device.list_devices()
-    else:
-        return []
+    # Fallback: use boolean flag and fabricate result list.
+    if hasattr(ct2, "has_cuda") and ct2.has_cuda():
+        return ["cpu", "cuda"]
+    return ["cpu"]
 
 
 def _detect_device() -> str:
