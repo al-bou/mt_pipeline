@@ -121,18 +121,19 @@ def translate_batch(
     prompt and protects with *no‑repeat‑ngram*.
     """
 
-    # Resolve BOS token reliably
-    if tokenizer.bos_token_id is not None:
-        bos = tokenizer.convert_ids_to_tokens(tokenizer.bos_token_id)
-    else:
-        bos = "<s>"  # fallback textual token present in NLLB vocab
-
+        # NLLB expects the **language tag only** as first token; no explicit BOS.
     src_tag = _find_lang_tag(tokenizer, src_lang)
     tgt_tag = _find_lang_tag(tokenizer, tgt_lang)
 
-    batch_tokens = [[bos, src_tag] + tokenizer.tokenize(s) for s in sentences]
+    batch_tokens = [[src_tag] + tokenizer.tokenize(s) for s in sentences]
 
     results = translator.translate_batch(
+        batch_tokens,
+        beam_size=beam,
+        target_prefix=[[tgt_tag] for _ in sentences],
+        max_decoding_length=256,
+        no_repeat_ngram_size=3,
+    )(
         batch_tokens,
         beam_size=beam,
         target_prefix=[[tgt_tag] for _ in sentences],  # BOS implicit in decoder
