@@ -93,6 +93,7 @@ def _find_lang_tag(tok, code: str) -> str:
     raise ValueError(f"Cannot find language tag for {code} in tokenizer")
 
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # Translation wrapper
 # ---------------------------------------------------------------------------
 
@@ -105,26 +106,35 @@ def translate_batch(
     src_lang: str = _SUPPORTED_SOURCES[0],
     tgt_lang: str = _SUPPORTED_TARGETS[0],
 ) -> List[str]:
-    """Translate *sentences* using NLLB and CTranslate2."""
+    """Translate *sentences* using NLLB and CTranslate2.
 
+    According to the NLLB paper and the CT2 conversion script, the input
+    should start with ``<s> <src_lang>`` and the decoder must be primed
+    with ``<s> <tgt_lang>``.  Providing only the language tag can lead to
+    degenerate repetitions.  This wrapper enforces the BOS token and sets
+    reasonable decoding guards (EOS, no‑repeat 3‑gram).
+    """
+
+    bos = tokenizer.bos_token or "<s>"
     src_tag = _find_lang_tag(tokenizer, src_lang)
     tgt_tag = _find_lang_tag(tokenizer, tgt_lang)
 
-    batch_tokens = [[src_tag] + tokenizer.tokenize(s) for s in sentences]
+    batch_tokens = [[bos, src_tag] + tokenizer.tokenize(s) for s in sentences]
 
     results = translator.translate_batch(
         batch_tokens,
         beam_size=beam,
-        target_prefix=[[tgt_tag] for _ in sentences],
-        end_token="</s>",               # stop generation at EOS
+        target_prefix=[[bos, tgt_tag] for _ in sentences],
+        end_token="</s>",               # stop at EOS
         no_repeat_ngram_size=3,          # curb repetitions
+        max_decoding_length=256,
     )
 
     outputs: List[str] = []
     for r in results:
         tokens = r.hypotheses[0]
-        # Remove leading language tag if still present
-        if tokens and tokens[0] in {tgt_tag, src_tag}:
+        # Drop possible leading BOS / language tags
+        while tokens and tokens[0] in {bos, tgt_tag, src_tag}:
             tokens = tokens[1:]
         ids = tokenizer.convert_tokens_to_ids(tokens)
         outputs.append(tokenizer.decode(ids, skip_special_tokens=True))
