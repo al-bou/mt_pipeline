@@ -112,10 +112,12 @@ def translate_batch(
 
     batch_tokens = [[src_tag] + tokenizer.tokenize(s) for s in sentences]
 
-    results = translator.translate_batch(
+        results = translator.translate_batch(
         batch_tokens,
         beam_size=beam,
         target_prefix=[[tgt_tag] for _ in sentences],
+        end_token="</s>",               # stop generation at EOS
+        no_repeat_ngram_size=3,          # curb repetitions
     )
 
     outputs: List[str] = []
