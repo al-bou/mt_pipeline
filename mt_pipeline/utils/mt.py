@@ -79,9 +79,32 @@ def translate_batch(
 ) -> List[str]:
     """Translate *sentences* using NLLB and CTranslate2."""
 
-    # Tokenise (prepend language tokens)
-    batch_tokens = [tokenizer.convert_ids_to_tokens([tokenizer.lang_code_to_id[src_lang]]) + tokenizer.tokenize(s) for s in sentences]
+        # ------------------------------------------------------------------
+    # Build source tokens with correct language tag, compatible with
+    # both old (<fra_Latn>) and new (<<fra_Latn>>) NLLB tokenizers.
+    # ------------------------------------------------------------------
+    if hasattr(tokenizer, "lang_code_to_id") and tokenizer.lang_code_to_id:
+        # Recent Transformers provide the mapping directly
+        src_tag_id = tokenizer.lang_code_to_id[src_lang]
+        src_tag = tokenizer.convert_ids_to_tokens(src_tag_id)
+        tgt_tag = tokenizer.convert_ids_to_tokens(tokenizer.lang_code_to_id[tgt_lang])
+    else:
+        # Fallback: try the two textual forms
+        for cand in (f"<<{src_lang}>>", f"<{src_lang}>"):
+            if tokenizer.convert_tokens_to_ids(cand) != tokenizer.unk_token_id:
+                src_tag = cand
+                break
+        else:
+            raise ValueError(f"Cannot find language tag for {src_lang} in tokenizer")
+        tgt_tag = f"<{tgt_lang}>"
+
+    batch_tokens = [[src_tag] + tokenizer.tokenize(s) for s in sentences]
+
     translations = translator.translate_batch(
+        batch_tokens,
+        beam_size=beam,
+        target_prefix=[[tgt_tag] for _ in sentences],
+    )(
         batch_tokens,
         beam_size=beam,
         target_prefix=[[f"<{tgt_lang}>"] for _ in sentences],
