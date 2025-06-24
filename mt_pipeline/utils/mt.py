@@ -78,7 +78,7 @@ def load_translator(
     translator = ct2.Translator(
         str(model_dir), device=device, compute_type="int8" if int8 else "auto"
     )
-    tokenizer = AutoTokenizer.from_pretrained(_DEFAULT_TOKENIZER_REPO)
+    tokenizer = AutoTokenizer.from_pretrained(model_dir)
     return translator, tokenizer
 
 # ---------------------------------------------------------------------------
@@ -124,16 +124,16 @@ def translate_batch(
     tgt_tag = _find_lang_tag(tokenizer, tgt_lang)
 
     # 1) Tokenise inputs with the source language tag in first position
-    batch_tokens = [[src_tag] + tokenizer.tokenize(s) for s in sentences]
+    batch_tokens = [[src_lang] + tokenizer.tokenize(s) for s in sentences]
 
-    # 2) Run translation
     results = translator.translate_batch(
         batch_tokens,
         beam_size=beam,
-        target_prefix=[[tgt_tag] for _ in sentences],
+        target_prefix=[[tgt_lang]] * len(sentences),
         max_decoding_length=256,
         no_repeat_ngram_size=3,
     )
+
 
     # 3) Detokenise outputs, dropping the leading language tag if present
     outputs: List[str] = []
